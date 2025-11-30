@@ -125,6 +125,7 @@ class MultiModalModel:
             if caption.startswith("a photo of a"):
                 caption = caption[12:].strip()
             return caption
+        
         except Exception as e:
             print(f"Vision Error: {e}")
             import traceback
