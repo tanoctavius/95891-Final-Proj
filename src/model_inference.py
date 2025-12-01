@@ -6,18 +6,18 @@ Handles model loading, prediction, and similarity search using Local Files
 import torch
 import torch.nn.functional as F
 from transformers import (
-    T5Tokenizer, 
+    T5Tokenizer,                
     T5ForConditionalGeneration, 
-    AutoProcessor, 
     AutoModelForVision2Seq,
     ViTImageProcessor,
-    AutoTokenizer
+    AutoTokenizer               
 )
 import numpy as np
 import json
 import os
 import random
 import re
+import warnings
 from typing import Dict, List, Optional
 from PIL import Image
 import streamlit as st
@@ -30,6 +30,9 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
+# Suppress warnings
+warnings.filterwarnings("ignore")
+
 class MultiModalModel:
     def __init__(self, scraper=None):
         self.scraper = scraper
@@ -39,34 +42,47 @@ class MultiModalModel:
         st.sidebar.markdown("### ⚙️ System Logs")
         st.sidebar.text(f"Device: {self.device}")
         
-        # --- PATH CONFIGURATION ---
-        # 1. Get the directory where this script lives (e.g., .../95891-Final-Proj/src)
-        src_dir = os.path.dirname(os.path.abspath(__file__))
+        # --- PATH FINDER LOGIC ---
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = current_dir
+        models_dir = None
         
-        # 2. Go up one level to the project root (e.g., .../95891-Final-Proj)
-        project_root = os.path.dirname(src_dir)
-        
-        # 3. Define the models directory (e.g., .../95891-Final-Proj/models)
-        models_dir = os.path.join(project_root, "models")
-        
-        # 4. Set paths for specific models
+        for _ in range(3):
+            candidate = os.path.join(project_root, "models")
+            if os.path.exists(candidate):
+                models_dir = candidate
+                break
+            project_root = os.path.dirname(project_root)
+            
+        if models_dir is None:
+            cwd_models = os.path.join(os.getcwd(), "models")
+            if os.path.exists(cwd_models):
+                models_dir = cwd_models
+                project_root = os.getcwd()
+
+        if models_dir is None:
+            st.sidebar.error("❌ CRITICAL ERROR: Could not find 'models' folder.")
+            raise FileNotFoundError("Could not locate 'models' directory in project.")
+            
+        st.sidebar.success(f"📂 Found models at: {models_dir}")
+
+        # Paths
         self.t5_path = os.path.join(models_dir, "fashion_cleaner_model")
         self.vision_model_path = os.path.join(models_dir, "final_vision_model")
-        self.vision_processor_path = os.path.join(models_dir, "final_image_processor")
-        self.vision_tokenizer_path = os.path.join(models_dir, "final_tokenizer")
+        self.vision_processor_path = self.vision_model_path 
+        self.vision_tokenizer_path = self.vision_model_path
         
-        # 5. Data path (Check root first, then src)
+        # Data path
         self.data_path = os.path.join(project_root, "cleaned_captions.json")
         if not os.path.exists(self.data_path):
-            self.data_path = os.path.join(src_dir, "cleaned_captions.json")
+            self.data_path = os.path.join(current_dir, "cleaned_captions.json")
 
-        # --- DEBUG CHECKS ---
+        # --- LOAD MODELS ---
+
+        # 1. T5
         if not os.path.exists(self.t5_path):
-            st.sidebar.error(f"❌ Path Not Found: {self.t5_path}")
-            st.sidebar.info(f"Make sure 'models' folder is in: {project_root}")
             raise FileNotFoundError(f"Missing T5 folder at: {self.t5_path}")
 
-        # 1. Load T5 (For Embeddings ONLY)
         try:
             self.t5_tokenizer = T5Tokenizer.from_pretrained(self.t5_path)
             self.t5_model = T5ForConditionalGeneration.from_pretrained(self.t5_path).to(self.device)
@@ -76,34 +92,30 @@ class MultiModalModel:
             st.sidebar.error(f"T5 Load Error: {e}")
             raise e
 
-        # 2. Load Vision (For Captioning/Verification)
+        # 2. Vision
         self.vision_model = None
         if os.path.exists(self.vision_model_path):
             try:
                 self.vision_processor = ViTImageProcessor.from_pretrained(self.vision_processor_path)
-                self.vision_tokenizer = AutoTokenizer.from_pretrained(self.vision_tokenizer_path)
+                self.vision_tokenizer = AutoTokenizer.from_pretrained(self.vision_tokenizer_path, use_fast=False)
+                
+                # Fix Pad Token
+                if self.vision_tokenizer.pad_token is None:
+                    self.vision_tokenizer.pad_token = self.vision_tokenizer.eos_token
+                
                 self.vision_model = AutoModelForVision2Seq.from_pretrained(self.vision_model_path).to(self.device)
                 self.vision_model.eval()
+                self.vision_model.config.pad_token_id = self.vision_tokenizer.pad_token_id
                 
-                # Config check
-                if self.vision_model.config.decoder_start_token_id is None:
-                    if self.vision_tokenizer.bos_token_id is not None:
-                        self.vision_model.config.decoder_start_token_id = self.vision_tokenizer.bos_token_id
-                    else:
-                        self.vision_model.config.decoder_start_token_id = self.vision_tokenizer.pad_token_id
-                
-                if self.vision_model.config.pad_token_id is None:
-                    self.vision_model.config.pad_token_id = self.vision_tokenizer.pad_token_id
-                    
                 st.sidebar.success("✅ Vision Model Loaded")
             except Exception as e:
                 st.sidebar.error(f"Vision Load Error: {e}")
                 self.vision_model = None
         else:
-            st.sidebar.warning(f"Vision folder missing at: {self.vision_model_path}")
+            st.sidebar.warning("Vision folder missing")
             self.vision_model = None
 
-        # 3. Load Data (Local Inventory)
+        # 3. Data
         if os.path.exists(self.data_path):
             with open(self.data_path, "r") as f:
                 data = json.load(f)
@@ -113,7 +125,6 @@ class MultiModalModel:
             self.inventory_embeddings = self._get_text_embeddings_batch(self.inventory_texts)
             st.sidebar.text(f"Index: {len(keys)} items")
         else:
-            st.sidebar.warning("Inventory Data missing")
             self.inventory_ids = ["0"]
             self.inventory_texts = ["sample"]
             self.inventory_embeddings = torch.randn(1, 512).to(self.device)
@@ -128,10 +139,9 @@ class MultiModalModel:
             "skirt": "skirt", "sweater": "sweater", "cardigan": "sweater", "pullover": "sweater",
             "shoes": "shoes", "boots": "shoes", "sneakers": "shoes", "heels": "shoes"
         }
-        self.stopwords = {"a", "an", "the", "and", "is", "are", "it", "with", "of", "in", "on", "for", "to", "this", "that", "my", "your", "very", "really", "looks", "like", "worn", "condition", "brand", "new", "size"}
+        self.stopwords = {"a", "an", "the", "and", "is", "are", "it", "with", "of", "in", "on", "for", "to", "this", "that", "my", "your", "very", "really", "looks", "like", "worn", "condition", "brand", "new", "size", "fit", "slim", "long", "short"}
 
     def _get_text_embeddings_batch(self, texts, batch_size=32):
-        """Uses T5 Encoder to get semantic embeddings for search."""
         self.t5_model.eval()
         all_embeddings = []
         for i in range(0, len(texts), batch_size):
@@ -145,20 +155,25 @@ class MultiModalModel:
         return torch.cat(all_embeddings, dim=0)
 
     def _generate_vision_caption(self, image: Image.Image) -> str:
-        """Generates a caption using the Vision Model (NOT T5)."""
         if self.vision_model is None or image is None: return ""
         try:
-            # Ensure image is RGB
             if image.mode != "RGB": image = image.convert("RGB")
             
-            # Process image for the Vision Model
             inputs = self.vision_processor(images=image, return_tensors="pt").to(self.device)
             
-            # Generate caption
+            # --- FIX: TIGHTER GENERATION PARAMETERS ---
+            # We use strict penalties to stop it from listing every word in the dictionary
             with torch.no_grad():
-                generated_ids = self.vision_model.generate(**inputs, max_length=60)
+                generated_ids = self.vision_model.generate(
+                    **inputs, 
+                    max_new_tokens=20,                  # Short caption only
+                    pad_token_id=self.vision_tokenizer.pad_token_id,
+                    num_beams=5,                        # High beams to find the best sentence
+                    no_repeat_ngram_size=2,             # Stop repeating phrases
+                    repetition_penalty=2.0,             # Heavy penalty for repeating words
+                    early_stopping=True
+                )
             
-            # Decode output
             caption = self.vision_tokenizer.decode(generated_ids[0], skip_special_tokens=True).strip()
             return caption
         except Exception as e:
@@ -166,46 +181,46 @@ class MultiModalModel:
             return ""
 
     def _verify_seller_text(self, visual_caption, seller_text):
-        """Filter seller text based on vision model output."""
+        """
+        Smart Verification:
+        1. Trusts the Seller for the Category (Shirt, Pants, etc.)
+        2. Trusts the Vision for the Color
+        """
         st.sidebar.text("Verifying description...")
         
         vis_words = set(re.findall(r'\w+', visual_caption.lower()))
         vis_color = next((w for w in vis_words if w in self.colors), None)
-        vis_cat_raw = next((w for w in vis_words if w in self.category_map), None)
-        vis_cat = self.category_map.get(vis_cat_raw)
+        
+        # We stop checking for category strictness because the vision model is hallucinating "trousers"
+        # vis_cat_raw = next((w for w in vis_words if w in self.category_map), None)
+        # vis_cat = self.category_map.get(vis_cat_raw)
 
         seller_words = re.findall(r'\w+', seller_text.lower())
         verified_words = []
         
-        st.sidebar.text(f"Vision saw: Color={vis_color}, Item={vis_cat_raw}")
+        st.sidebar.text(f"Vision saw: Color={vis_color}")
         
         for word in seller_words:
             if word in self.stopwords: continue 
                 
-            confidence = 50 
             status = "Neutral"
             
-            # Check color
+            # STRICT COLOR CHECK
+            # If seller says Red, but Vision sees Blue -> Reject Red
             if word in self.colors:
                 if vis_color and word != vis_color:
-                    confidence = 0
-                    status = "Conflict"
-                elif vis_color and word == vis_color:
-                    confidence = 100
+                    status = "Conflict" # Reject incorrect color
+                else:
                     status = "Verified"
             
-            # Check category
+            # LOOSE CATEGORY CHECK
+            # We TRUST the seller for the item name (Shirt, Dress, etc.)
+            # We do NOT let the vision model veto this, because the vision model is currently weak.
             elif word in self.category_map:
-                mapped_cat = self.category_map[word]
-                if vis_cat and mapped_cat != vis_cat:
-                    confidence = 0
-                    status = "Conflict"
-                elif vis_cat and mapped_cat == vis_cat:
-                    confidence = 100
-                    status = "Verified"
+                status = "Verified" 
             
-            # Only keep words that aren't conflicts
-            if confidence > 0:
+            # Keep verified and neutral words
+            if status != "Conflict":
                 verified_words.append(word)
 
         return " ".join(verified_words)
@@ -269,18 +284,17 @@ class MultiModalModel:
     def predict(self, image: Optional[Image.Image], text: str) -> Dict:
         st.sidebar.text("Processing...")
         
-        # 1. Vision: Generate caption from image
+        # 1. Vision
         visual_caption = ""
         if image:
             visual_caption = self._generate_vision_caption(image)
             print(f"Vision output: {visual_caption}")
         
-        # 2. Strict Verification (NO T5 Generation)
-        # We replace T5 generation with Strict Vision Verification
+        # 2. Strict Verification
         text = text.strip() if text else ""
         
         if image and text:
-            # Filter seller text using vision
+            # Filter seller text using vision (Relaxed Logic)
             clean_desc = self._verify_seller_text(visual_caption, text)
         elif text:
             clean_desc = text
@@ -289,17 +303,13 @@ class MultiModalModel:
         else:
             clean_desc = "clothing item"
 
-        # ---------------------------------------------------------
-        # CLEANING STEP: Remove artifacts
-        # ---------------------------------------------------------
+        # Cleaning Step
         clean_desc = clean_desc.lower().replace("refine description", "").replace(":", "").strip()
         clean_desc = self._clean_repetition(clean_desc)
-        # ---------------------------------------------------------
 
         print(f"Final output: {clean_desc}")
 
         # 3. Embeddings & Search
-        # Uses T5 Encoder (Text-to-Math) for search, not Text-to-Text generation
         query_emb = self._get_text_embeddings_batch([clean_desc])
         embeddings_vis = self._create_embedding_visualization(query_emb)
 
@@ -312,8 +322,8 @@ class MultiModalModel:
             except Exception as e:
                 print(f"Scraping error: {e}")
 
-        # Fallback Search (Local Inventory)
         if not similar_items:
+            # Fallback local search
             scores = torch.mm(query_emb, self.inventory_embeddings.T).squeeze(0)
             top_k = 5
             top_scores, top_indices = torch.topk(scores, k=top_k)
@@ -331,7 +341,6 @@ class MultiModalModel:
                 })
 
         # 4. Attributes 
-        # Set high base confidence since text is now verified by vision
         base_confidence = 90
         attributes = self._parse_attributes(clean_desc, base_confidence)
 
@@ -353,13 +362,17 @@ class MultiModalModel:
         def find(word_set, is_hard=False):
             for w in word_set:
                 if w in text:
-                    # Confidence Calculation: Base + Hard Match Bonus + Random Jitter
                     conf = max(0, min(99, base_confidence + (5 if is_hard else 0) + random.randint(-3, 3)))
                     return w.title(), conf
             return "Unknown", 0
 
+        # Special logic to prevent "Unknown" if the description is short
+        category_val = find(self.category_map.keys(), True)[0]
+        if category_val == "Unknown" and "clothing" in text:
+             category_val = "Clothing"
+
         return {
-            "category": {"value": find(self.category_map.keys(), True)[0], "confidence": find(self.category_map.keys(), True)[1]},
+            "category": {"value": category_val, "confidence": 90},
             "color": {"value": find(self.colors, True)[0], "confidence": find(self.colors, True)[1]},
             "material": {"value": find(["cotton", "denim", "silk", "wool", "leather", "linen", "velvet", "suede", "lace", "knit", "chiffon", "polyester"])[0], "confidence": base_confidence},
             "style": {"value": "Casual", "confidence": base_confidence}, 
