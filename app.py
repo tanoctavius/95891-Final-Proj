@@ -14,19 +14,19 @@ import sys
 import os
 import re
 
-# --- 1. PATH CONFIGURATION (CRITICAL FOR NEW STRUCTURE) ---
-# Add 'src' and 'scrapers' to Python's search path so we can import from them
+# --- 1. path config (critical for new structure) ---
+# add src and scrapers to path for imports
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir / "src"))
 sys.path.append(str(current_dir / "scrapers"))
 
-# --- 2. UPDATED IMPORTS ---
-# Now importing from the new folder locations
+# --- 2. updated imports ---
+# importing from new folders
 from src.model_inference import MultiModalModel
 from src.data_utils import load_catalog, get_sample_noisy_description
 from scrapers.poshmark_scraper import PoshmarkScraper
 
-# Page configuration
+# page config
 st.set_page_config(
     page_title="Secondhand Fashion AI",
     page_icon="👗",
@@ -34,7 +34,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# custom css for styling
 st.markdown("""
     <style>
     .main-header {
@@ -65,7 +65,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
+# init session state
 if 'processed' not in st.session_state:
     st.session_state.processed = False
 if 'uploaded_image' not in st.session_state:
@@ -81,43 +81,26 @@ if 'scraped_images' not in st.session_state:
 if 'selected_image_idx' not in st.session_state:
     st.session_state.selected_image_idx = 0
 
-# --- NEW HELPER FUNCTION: OPTIMIZED QUERY GENERATION ---
-def generate_optimized_query(attributes, clean_description):
-    """
-    Constructs a search query based on high-confidence attributes 
-    and key terms from the clean description.
-    """
-    query_parts = []
-    
-    # 1. Brand (Highest Priority)
-    brand = attributes.get("brand", {}).get("value")
-    # specific logic: only add if it's not "Unknown" or None
-    if brand and brand.lower() not in ["unknown", "none", "n/a", "generic"]:
-        query_parts.append(brand)
-        
-    # 2. Color
-    color = attributes.get("color", {}).get("value")
-    if color and color.lower() not in ["unknown", "multicolor"]:
-        query_parts.append(color)
-        
-    # 3. Category/Item Name
-    category = attributes.get("category", {}).get("value")
-    if category:
-        query_parts.append(category)
-        
-    # 4. Style (Optional - can refine search but sometimes narrows too much)
-    style = attributes.get("style", {}).get("value")
-    if style and style.lower() not in ["casual", "unknown"]:
-        query_parts.append(style)
+# --- sidebar ui (moved up) ---
+# define before loading model so it shows at top
+st.sidebar.markdown("### 📖 Instructions")
+st.sidebar.markdown("""
+1. Choose input method (Upload or Poshmark Link)
+2. Provide image and description
+3. Click "Process Listing" to analyze
+4. View extracted attributes and similar items
+""")
+st.sidebar.markdown("---")
 
-    # Fallback: If attributes failed, use the generated clean description
-    # Truncate to first 5 words to avoid Poshmark search confusion
-    if len(query_parts) < 2 and clean_description:
-        return " ".join(clean_description.split()[:5])
-        
-    return " ".join(query_parts)
+# validation mode toggle
+validation_mode = st.sidebar.checkbox(
+    "Enable Validation Mode",
+    help="Compare predictions against ground truth labels from Fashion-IQ dataset"
+)
+st.sidebar.markdown("---")
+# -----------------------------
 
-# Initialize scraper first (needed for model)
+# init scraper first (needed for model)
 @st.cache_resource
 def load_scraper():
     """Load the Poshmark scraper (with caching)"""
@@ -125,10 +108,11 @@ def load_scraper():
 
 scraper = load_scraper()
 
-# Load model with scraper instance
+# load model with scraper
 @st.cache_resource
 def load_model():
     """Load the multi-modal model (with caching)"""
+    # prints to sidebar on init, so appears below instructions
     return MultiModalModel(scraper=scraper)
 
 @st.cache_data
@@ -139,35 +123,19 @@ def load_catalog_data():
 model = load_model()
 catalog_df = load_catalog_data()
 
-
-# Validation Mode Toggle
-validation_mode = st.sidebar.checkbox(
-    "Enable Validation Mode",
-    help="Compare predictions against ground truth labels from Fashion-IQ dataset"
-)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📖 Instructions")
-st.sidebar.markdown("""
-1. Choose input method (Upload or Poshmark Link)
-2. Provide image and description
-3. Click "Process Listing" to analyze
-4. View extracted attributes and similar items
-""")
-
 # ==========================================
-# MAIN CONTENT
+# main content
 # ==========================================
 st.markdown('<div class="main-header">👗 Multi-Modal Attribute Extraction & Retrieval</div>', unsafe_allow_html=True)
 st.markdown("### Solving the Discovery Problem in Sustainable Fashion")
 
 # ==========================================
-# INPUT MODULE
+# input module -> noisy listing
 # ==========================================
 st.markdown("---")
 st.markdown("## 📥 Input Module - The \"Noisy\" Listing")
 
-# Input Method Selection
+# input method selection
 input_method = st.radio(
     "Choose Input Method:",
     ["📤 Upload Image & Text", "🔗 Poshmark Link"],
@@ -176,9 +144,9 @@ input_method = st.radio(
 )
 st.session_state.input_method = "upload" if input_method == "📤 Upload Image & Text" else "poshmark"
 
-# Conditional Input Based on Method
+# conditional input based on method
 if st.session_state.input_method == "upload":
-    # Traditional upload method
+    # traditional upload method
     col1, col2 = st.columns([1, 1])
 
     with col1:
@@ -208,17 +176,17 @@ if st.session_state.input_method == "upload":
         )
         st.session_state.original_text = seller_text
     
-    # Process Button
+    # process button
     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
     with col_btn2:
         process_button_upload = st.button("🚀 Process Listing", type="primary", use_container_width=True, key="process_upload")
     uploaded_file_check = uploaded_file
 
 else:
-    # Initialize for Poshmark method
+    # init for poshmark method
     process_button_upload = False
     uploaded_file_check = None
-    # Poshmark link scraping method
+    # poshmark link scraping
     st.markdown("### 🔗 Poshmark Listing URL")
     poshmark_url = st.text_input(
         "Paste Poshmark listing URL:",
@@ -228,7 +196,7 @@ else:
     
     scrape_button = st.button("🔍 Scrape Listing", type="primary")
     
-    # Handle scraping
+    # handle scraping
     if scrape_button:
         if not poshmark_url:
             st.error("❌ Please enter a Poshmark URL")
@@ -240,7 +208,7 @@ else:
                 if scraped_data['success']:
                     st.success("✅ Successfully scraped listing!")
                     
-                    # Display scraped information
+                    # display scraped info
                     col1, col2 = st.columns([1, 1])
                     
                     with col1:
@@ -255,11 +223,11 @@ else:
                             st.write(f"**Price:** {scraped_data['price']}")
                     
                     with col2:
-                        # Display scraped images
+                        # display scraped images
                         if scraped_data['images']:
                             st.markdown(f"#### 🖼️ Scraped Images ({len(scraped_data['images'])} found)")
                             
-                            # Download all images
+                            # download all images
                             with st.spinner("Downloading images..."):
                                 downloaded_images = []
                                 for idx, img_url in enumerate(scraped_data['images']):
@@ -272,11 +240,11 @@ else:
                                 
                                 st.session_state.scraped_images = downloaded_images
                             
-                            # Display image gallery with selection
+                            # display image gallery with selection
                             if st.session_state.scraped_images:
                                 num_images = len(st.session_state.scraped_images)
                                 
-                                # Image selector
+                                # image selector
                                 if num_images > 1:
                                     selected_idx = st.selectbox(
                                         "Select image to use for processing:",
@@ -290,18 +258,18 @@ else:
                                     selected_idx = 0
                                     st.session_state.selected_image_idx = 0
                                 
-                                # Display selected image
+                                # display selected image
                                 selected_image = st.session_state.scraped_images[selected_idx]
                                 st.image(selected_image, caption=f"Selected Image {selected_idx+1} of {num_images}", width=300)
                                 st.session_state.uploaded_image = selected_image
                                 
-                                # Show gallery of all images in columns
+                                # show gallery of all images in columns
                                 if num_images > 1:
                                     st.markdown("**All Images:**")
                                     gallery_cols = st.columns(min(5, num_images))
                                     for idx, img in enumerate(st.session_state.scraped_images):
                                         with gallery_cols[idx % 5]:
-                                            # Highlight selected image
+                                            # highlight selected image
                                             border = "✅ Selected" if idx == selected_idx else ""
                                             st.image(img, caption=f"{idx+1}", width=100)
                                             if idx == selected_idx:
@@ -309,7 +277,7 @@ else:
                             else:
                                 st.warning("Could not download any images")
                         
-                    # Pre-fill description
+                    # pre-fill description
                     if scraped_data['description']:
                         st.markdown("#### 📝 Scraped Description")
                         edited_description = st.text_area(
@@ -320,7 +288,7 @@ else:
                         )
                         st.session_state.original_text = edited_description
                     
-                    # Process Button for scraped data
+                    # process button for scraped data
                     st.markdown("---")
                     col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
                     with col_btn2:
@@ -330,7 +298,7 @@ else:
                     process_button_scraped = False
                     uploaded_file_check = None
     else:
-        # If we have previously scraped data, show it
+        # if we have previously scraped data, show it
         if st.session_state.scraped_data and st.session_state.scraped_data.get('success'):
             scraped_data = st.session_state.scraped_data
             
@@ -343,10 +311,10 @@ else:
                     st.write(f"**Size:** {scraped_data['size']}")
             
             with col2:
-                # Display scraped images if available
+                # display scraped images if available
                 if st.session_state.scraped_images:
                     num_images = len(st.session_state.scraped_images)
-                    # Image selector
+                    # image selector
                     if num_images > 1:
                         selected_idx = st.selectbox(
                             "Select image to use for processing:",
@@ -393,7 +361,7 @@ else:
             uploaded_file_check = None
 
 # ==========================================
-# PROCESSING & OUTPUT
+# processing & output
 # ==========================================
 try:
     _ = process_button_upload
@@ -415,7 +383,7 @@ try:
 except NameError:
     uploaded_file_check = None
 
-# Combine process button states
+# combine process button states
 process_button = (
     (st.session_state.input_method == "upload" and process_button_upload) or
     (st.session_state.input_method == "poshmark" and process_button_scraped) or
@@ -431,11 +399,11 @@ has_valid_input = (
 if process_button and has_valid_input:
     with st.spinner("🤖 Processing listing... Generating embeddings, extracting attributes, and searching Poshmark..."):
         import time
-        # time.sleep(1) # Removed sleep for faster performance
+        # time.sleep(1) # removed sleep for faster performance
         
         text_description = st.session_state.original_text or ""
         
-        # 1. Run the AI Model first to get the "Clean" data
+        # 1. run ai model first to get clean data
         if st.session_state.uploaded_image or validation_mode:
             if validation_mode:
                 results = model.predict_validation_mode()
@@ -445,44 +413,41 @@ if process_button and has_valid_input:
                     text=text_description if text_description else ""
                 )
             
-            # --- UPDATED LOGIC: Search based on Cleaned Text ---
+            # --- UPDATED LOGIC: Exact Search based on Cleaned Text ---
             
-            # 2. Generate an optimized query from the AI results
-            search_query = generate_optimized_query(
-                results["attributes"], 
-                results["clean_description"]
-            )
+            # 2. Use the clean description directly for search
+            search_query = results["clean_description"]
             
-            # Feedback to user
+            # feedback to user
             st.toast(f"Searching Poshmark for: '{search_query}'")
             print(f"DEBUG: Optimized Search Query: {search_query}")
 
-            # 3. Execute Search using the existing scraper instance
+            # 3. execute search using existing scraper
             try:
-                # Add "women" or "men" if your model extracts gender, otherwise Poshmark defaults
+                # add gender if extracted, otherwise defaults
                 # strict=False allows fuzzy matching
                 new_search_results = scraper.search_poshmark(search_query, top_k=5)
                 
-                # Update the results object with the live scraper data if we found results
+                # update results with live scraper data if found
                 if new_search_results:
                     results["similar_items"] = new_search_results
                 
             except Exception as e:
                 print(f"Search Error: {e}")
-                # Fallback is to keep existing results or empty list
+                # fallback to keep existing results/empty list
 
-            # --- END UPDATED LOGIC ---
+            # --- end updated logic ---
 
             st.session_state.processed = True
             st.session_state.results = results
             st.rerun()
 
-# Display results if processed
+# display results if processed
 if st.session_state.processed and 'results' in st.session_state:
     results = st.session_state.results
     
     # ==========================================
-    # OUTPUT MODULE A: Structured Attribute Verification
+    # output module a -> structured attribute verification
     # ==========================================
     st.markdown("---")
     st.markdown("## ✅ Output Module A: Structured Attribute Verification")
@@ -496,7 +461,7 @@ if st.session_state.processed and 'results' in st.session_state:
         st.markdown("### ✨ Generated (Clean) Description")
         st.success(f'"{results["clean_description"]}"')
     
-    # Attribute Extraction Table
+    # attribute extraction table
     st.markdown("### 🏷️ Extracted Attributes")
     
     attributes_data = results["attributes"]
@@ -561,12 +526,12 @@ if st.session_state.processed and 'results' in st.session_state:
         st.markdown("---")
     
     # ==========================================
-    # OUTPUT MODULE B: Similarity Search & Retrieval
+    # output module b -> similarity search & retrieval
     # ==========================================
     st.markdown("---")
     st.markdown("## 🔍 Output Module B: Similarity Search & Retrieval")
     
-    # Ranked Results Grid
+    # ranked results grid
     st.markdown("### 🎯 Top-5 Similar Items Found on Poshmark")
     
     similar_items = results["similar_items"]
@@ -580,12 +545,12 @@ if st.session_state.processed and 'results' in st.session_state:
                 display_image = None
                 if item.get("image_url"):
                     try:
-                        # Attempt to download image directly since we are live searching
+                        # attempt to download image directly since we are live searching
                         display_image = scraper.download_image(item["image_url"])
                     except Exception as e:
                         st.caption(f"Could not load image: {str(e)[:50]}")
                 
-                # Fallback for internal dataset images if not a live search
+                # fallback for internal images if not live search
                 if not display_image and item.get("image_path"):
                     try:
                         display_image = Image.open(item["image_path"])
@@ -633,20 +598,20 @@ if st.session_state.processed and 'results' in st.session_state:
         st.dataframe(similarity_df, use_container_width=True, hide_index=True)
 
     # ==========================================
-    # OUTPUT MODULE C: Analytics & Insights
+    # output module c -> analytics & insights
     # ==========================================
     st.markdown("---")
     st.markdown("## 📈 Output Module C: Analytics & Insights")
     
     tab1, tab2, tab3 = st.tabs(["🧠 Model Confidence", "💰 Price Analysis", "🗺️ Embedding Space"])
     
-    # TAB 1: Confidence Radar
+    # tab 1 -> confidence radar
     with tab1:
         st.markdown("##### Visualizing model certainty across attributes")
         try:
             attr_keys = list(results['attributes'].keys())
             attr_vals = [results['attributes'][k]['confidence'] for k in attr_keys]
-            # Close the loop
+            # close the loop
             attr_keys += [attr_keys[0]]
             attr_vals += [attr_vals[0]]
             
@@ -666,14 +631,14 @@ if st.session_state.processed and 'results' in st.session_state:
         except Exception as e:
             st.error(f"Could not generate radar chart: {e}")
 
-    # TAB 2: Price Analysis (IMPROVED with Box Plot)
+    # tab 2 -> price analysis (improved w/ box plot)
     with tab2:
         st.markdown("##### Price distribution of similar items found on Poshmark")
         price_data = []
         for item in similar_items:
             try:
                 p_str = str(item.get('price', ''))
-                # Extract number from string like "$25"
+                # extract number from string (e.g. "$25")
                 p_val = float(re.sub(r'[^\d.]', '', p_str))
                 price_data.append({
                     "Price": p_val,
@@ -695,11 +660,11 @@ if st.session_state.processed and 'results' in st.session_state:
             with col_metrics2:
                 st.metric("Price Range", f"${min_price:.0f} - ${max_price:.0f}")
                 
-            # Visualization: Box Plot with Points (Jitter)
+            # visualization -> box plot w/ points (jitter)
             fig_price = px.box(
                 df_prices,
-                x="Price",  # Horizontal for better readability of price range
-                points="all", # Show individual points
+                x="Price",  # horizontal for better readability of price range
+                points="all", # show individual points
                 hover_data=["Title", "Brand"],
                 title="Market Price Distribution",
                 labels={"Price": "Price ($)"},
@@ -710,7 +675,7 @@ if st.session_state.processed and 'results' in st.session_state:
         else:
             st.info("Not enough price data collected from search results.")
 
-    # TAB 3: Embedding Visualization (t-SNE)
+    # tab 3 -> embedding visualization (t-sne)
     with tab3:
         st.markdown("##### 2D Projection of Semantic Similarity")
         if results.get('embeddings_vis') is not None:
@@ -726,12 +691,12 @@ elif process_button:
         if not st.session_state.scraped_data or not st.session_state.scraped_data.get('success'):
             st.error("❌ Please scrape a Poshmark listing first!")
 
-# Footer
+# footer
 st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: gray; padding: 20px;'>
-    Multi-Modal Attribute Extraction & Retrieval System | Version 0.1 (MVP)
+    Multi-Modal Attribute Extraction & Retrieval System | Intro to AI
     </div>
     """,
     unsafe_allow_html=True

@@ -78,7 +78,7 @@ class PoshmarkScraper:
     
     def scrape_listing(self, url: str) -> Dict:
         """
-        Scrape a specific Poshmark listing URL for details
+        Scrape a Poshmark listing
         """
         result = {
             'success': False,
@@ -317,7 +317,7 @@ class PoshmarkScraper:
     def search_poshmark(self, query: str, top_k: int = 5) -> List[Dict]:
         """
         Search Poshmark for items matching the query and return top results.
-        Returns exactly top_k results by finding individual listing links.
+        Uses exact query without stripping punctuation.
         """
         results = []
         
@@ -325,16 +325,19 @@ class PoshmarkScraper:
             return results
         
         try:
-            # CLEANUP: Remove common punctuation
-            clean_query = re.sub(r'[^\w\s]', '', query)
-            encoded_query = quote_plus(clean_query.strip())
+            # Construct search URL - Using the exact query string
+            # We strip whitespace but do NOT remove other characters
+            encoded_query = quote_plus(query.strip())
             
-            # URL: Sort by relevance
+            # Use sort_by=relevance to get best matches
             search_url = f"https://poshmark.com/search?query={encoded_query}&sort_by=relevance"
+            
             print(f"DEBUG: Searching Poshmark URL: {search_url}")
             
+            # Add delay before request
             self._random_delay()
             
+            # Make request
             headers = self._get_headers()
             response = self.session.get(
                 search_url,
@@ -347,7 +350,7 @@ class PoshmarkScraper:
                 print(f"Search failed with status code: {response.status_code}")
                 return results
             
-            # Decompression handling
+            # Parse HTML
             try:
                 html_content = response.text
             except UnicodeDecodeError:
@@ -357,14 +360,14 @@ class PoshmarkScraper:
                         decompressed = brotli.decompress(response.content)
                         html_content = decompressed.decode('utf-8')
                     except Exception as e:
-                        print(f"Failed to decompress: {e}")
+                        print(f"Failed to decompress search results: {e}")
                         return results
                 else:
                     html_content = response.content.decode('utf-8', errors='ignore')
             
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # --- FIXED FINDING LOGIC ---
+            # --- IMPROVED FINDING LOGIC ---
             # 1. Select all <a> tags that look like listing links
             listing_links = soup.select('a[href*="/listing/"]')
             
